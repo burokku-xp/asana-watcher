@@ -1,0 +1,238 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'com.example'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.1'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.1'
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.17.1'
+}
+
+application {
+    mainClass = 'com.example.asanawatcher.Main'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// Create an uber-jar for easier jpackage (Gradle 7/8 style)
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+tasks.named('shadowJar', ShadowJar) {
+    archiveBaseName.set('asana-watcher')
+    archiveClassifier.set('') // remove default 'all' classifier
+    // Ensure the executable jar has a Main-Class for jpackage --main-jar
+    manifest {
+        attributes 'Main-Class': application.mainClass.get()
+    }
+}
+
+// Optional: copy custom icon into packaging resources (and app icon)
+tasks.register('prepareAppIcon') {
+    group = 'distribution'
+    description = 'Copy app icon into packaging/windows/app.ico and resources/app.ico'
+    doLast {
+        // Priority 1: -PappIcon=/path/to/icon.ico
+        def iconProp = project.findProperty('appIcon') as String
+        File src = null
+        if (iconProp) {
+            def f = new File(iconProp)
+            if (f.exists()) {
+                src = f
+            } else {
+                println "appIcon not found: ${f} (will try defaults)"
+            }
+        }
+
+        // Priority 2: packaging/windows/Asana.ico (repo default)
+        if (src == null) {
+            def defaultIco = file('packaging/windows/Asana.ico')
+            if (defaultIco.exists()) {
+                src = defaultIco
+            }
+        }
+
+        if (src == null) {
+            println 'No icon provided (appIcon prop) and no packaging/windows/Asana.ico found; skipping icon copy.'
+            return
+        }
+
+        def appIco = file('packaging/windows/app.ico')
+        def resIco = file('packaging/windows/resources/app.ico')
+        appIco.parentFile.mkdirs()
+        resIco.parentFile.mkdirs()
+        appIco.bytes = src.bytes
+        resIco.bytes = src.bytes
+        println "Copied app icon from ${src} to ${appIco} and ${resIco}"
+    }
+}
+
+tasks.register('packageWinExe', Exec) {
+    dependsOn tasks.shadowJar, tasks.named('prepareAppIcon'), tasks.named('downloadSnoreToast')
+    def appName = 'AsanaWatcher'
+    def appVersion = project.version
+    def outDir = file("${buildDir}/dist")
+    doFirst { outDir.mkdirs() }
+    workingDir project.projectDir
+    def mainJarName = "asana-watcher-${project.version}.jar"
+    doFirst {
+        def args = [
+            'jpackage',
+            '--type', 'exe',
+            '--name', appName,
+            '--app-version', appVersion,
+            '--input', file("${buildDir}/libs").absolutePath,
+            '--main-jar', mainJarName,
+            '--dest', outDir.absolutePath,
+            '--vendor', 'AsanaWatcher',
+            '--description', 'Monitor Asana section and notify on threshold',
+            '--win-shortcut',
+            '--win-menu',
+            '--win-dir-chooser',
+            '--resource-dir', file('packaging/windows/resources').absolutePath
+        ]
+        def appIco = file('packaging/windows/app.ico')
+        if (appIco.exists()) {
+            args += ['--icon', appIco.absolutePath]
+        }
+        commandLine args
+    }
+}
+
+tasks.register('packageWinMsi', Exec) {
+    dependsOn tasks.shadowJar, tasks.named('prepareAppIcon'), tasks.named('downloadSnoreToast')
+    def appName = 'AsanaWatcher'
+    def appVersion = project.version
+    def outDir = file("${buildDir}/dist")
+    doFirst { outDir.mkdirs() }
+    workingDir project.projectDir
+    def mainJarName = "asana-watcher-${project.version}.jar"
+    doFirst {
+        def args = [
+            'jpackage',
+            '--type', 'msi',
+            '--name', appName,
+            '--app-version', appVersion,
+            '--input', file("${buildDir}/libs").absolutePath,
+            '--main-jar', mainJarName,
+            '--dest', outDir.absolutePath,
+            '--vendor', 'AsanaWatcher',
+            '--description', 'Monitor Asana section and notify on threshold',
+            '--win-shortcut',
+            '--win-menu',
+            '--win-dir-chooser',
+            '--resource-dir', file('packaging/windows/resources').absolutePath
+        ]
+        def appIco = file('packaging/windows/app.ico')
+        if (appIco.exists()) {
+            args += ['--icon', appIco.absolutePath]
+        }
+        commandLine args
+    }
+}
+
+// Build app-image (no WiX required). Outputs a portable folder with runtime.
+tasks.register('packageWinImage', Exec) {
+    dependsOn tasks.shadowJar, tasks.named('prepareAppIcon'), tasks.named('downloadSnoreToast')
+    def appName = 'AsanaWatcher'
+    def appVersion = project.version
+    def outDir = file("${buildDir}/dist")
+    doFirst {
+        outDir.mkdirs()
+        // jpackage fails if the target app-image dir already exists
+        def imageDir = new File(outDir, appName)
+        if (imageDir.exists()) {
+            logger.lifecycle("Deleting existing app-image directory: ${imageDir}")
+            project.delete(imageDir)
+        }
+    }
+    workingDir project.projectDir
+    def mainJarName = "asana-watcher-${project.version}.jar"
+    doFirst {
+        def args = [
+            'jpackage',
+            '--type', 'app-image',
+            '--name', appName,
+            '--app-version', appVersion,
+            '--input', file("${buildDir}/libs").absolutePath,
+            '--main-jar', mainJarName,
+            '--dest', outDir.absolutePath,
+            '--vendor', 'AsanaWatcher',
+            '--description', 'Monitor Asana section and notify on threshold',
+            '--resource-dir', file('packaging/windows/resources').absolutePath
+        ]
+        def appIco = file('packaging/windows/app.ico')
+        if (appIco.exists()) {
+            args += ['--icon', appIco.absolutePath]
+        }
+        commandLine args
+    }
+}
+
+// Create a portable ZIP from app-image
+tasks.register('packageWinPortableZip', Zip) {
+    dependsOn tasks.named('packageWinImage')
+    group = 'distribution'
+    description = 'Zip the app-image into a portable ZIP'
+    def appName = 'AsanaWatcher'
+    archiveBaseName.set(appName)
+    archiveVersion.set(project.version.toString())
+    archiveClassifier.set('portable')
+    from("${buildDir}/dist/${appName}") {
+        into appName
+    }
+    destinationDirectory.set(file("${buildDir}/dist"))
+}
+
+// Download SnoreToast.exe into packaging/windows/resources
+tasks.register('downloadSnoreToast') {
+    group = 'distribution'
+    description = 'Download SnoreToast.exe into packaging/windows/resources'
+    doLast {
+        def outDir = file('packaging/windows/resources')
+        outDir.mkdirs()
+        def outFile = new File(outDir, 'SnoreToast.exe')
+        if (outFile.exists() && outFile.length() > 0) {
+            println "SnoreToast.exe already present at ${outFile} (${outFile.length()} bytes); skipping download."
+            return
+        }
+        def override = project.findProperty('snoretoastUrl') as String
+        def url
+        if (override) {
+            url = override
+            println "Using override URL: ${url}"
+        } else {
+            // Discover latest .exe asset via GitHub API
+            def api = new URL('https://api.github.com/repos/KDE/snoretoast/releases/latest')
+            def json = new groovy.json.JsonSlurper().parse(api)
+            def asset = json?.assets?.find { a ->
+                def n = (a?.name ?: '').toString().toLowerCase()
+                n.endsWith('.exe') && n.contains('snore')
+            }
+            if (!asset) {
+                throw new GradleException('SnoreToastの.exeアセットが見つかりませんでした。-PsnoretoastUrl= でURLを指定するか手動配置してください。')
+            }
+            url = asset.browser_download_url
+            println "Auto-detected: ${url}"
+        }
+        println "Downloading ${url} -> ${outFile}"
+        new URL(url).withInputStream { i -> outFile.withOutputStream { it << i } }
+        println "Downloaded SnoreToast to ${outFile.absolutePath} (${outFile.length()} bytes)"
+    }
+}
