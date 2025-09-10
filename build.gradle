@@ -107,9 +107,12 @@ tasks.register('packageWinExe', Exec) {
             '--win-dir-chooser',
             '--resource-dir', file('packaging/windows/resources').absolutePath
         ]
+        def skipIcon = (project.findProperty('skipIcon') as String)?.toLowerCase() in ['1','true','yes']
         def appIco = file('packaging/windows/app.ico')
-        if (appIco.exists()) {
+        if (!skipIcon && appIco.exists()) {
             args += ['--icon', appIco.absolutePath]
+        } else if (skipIcon) {
+            logger.lifecycle('skipIcon=true: not passing --icon to jpackage')
         }
         commandLine args
     }
@@ -139,9 +142,12 @@ tasks.register('packageWinMsi', Exec) {
             '--win-dir-chooser',
             '--resource-dir', file('packaging/windows/resources').absolutePath
         ]
+        def skipIcon = (project.findProperty('skipIcon') as String)?.toLowerCase() in ['1','true','yes']
         def appIco = file('packaging/windows/app.ico')
-        if (appIco.exists()) {
+        if (!skipIcon && appIco.exists()) {
             args += ['--icon', appIco.absolutePath]
+        } else if (skipIcon) {
+            logger.lifecycle('skipIcon=true: not passing --icon to jpackage')
         }
         commandLine args
     }
@@ -177,9 +183,12 @@ tasks.register('packageWinImage', Exec) {
             '--description', 'Monitor Asana section and notify on threshold',
             '--resource-dir', file('packaging/windows/resources').absolutePath
         ]
+        def skipIcon = (project.findProperty('skipIcon') as String)?.toLowerCase() in ['1','true','yes']
         def appIco = file('packaging/windows/app.ico')
-        if (appIco.exists()) {
+        if (!skipIcon && appIco.exists()) {
             args += ['--icon', appIco.absolutePath]
+        } else if (skipIcon) {
+            logger.lifecycle('skipIcon=true: not passing --icon to jpackage')
         }
         commandLine args
     }
@@ -198,6 +207,36 @@ tasks.register('packageWinPortableZip', Zip) {
         into appName
     }
     destinationDirectory.set(file("${buildDir}/dist"))
+}
+
+// Helper: detect if WiX Toolset v3 executables are on PATH
+def isExeOnPath = { String exe ->
+    def path = System.getenv('PATH') ?: ''
+    def sep = java.io.File.pathSeparator
+    return path.split(java.util.regex.Pattern.quote(sep)).any { p -> new File(p, exe).exists() }
+}
+
+// Convenience: Build EXE if WiX is available; otherwise build portable ZIP
+tasks.register('packageWin') {
+    group = 'distribution'
+    description = 'Build EXE when WiX is on PATH; otherwise portable ZIP'
+
+    def forcePortable = (project.findProperty('forcePortable') as String)?.toLowerCase() in ['1','true','yes']
+    def wixAvailable = isExeOnPath('candle.exe') && isExeOnPath('light.exe')
+
+    if (!forcePortable && wixAvailable) {
+        dependsOn tasks.named('packageWinExe')
+        doFirst { logger.lifecycle('WiX detected. Building Windows EXE (packageWinExe).') }
+    } else {
+        dependsOn tasks.named('packageWinPortableZip')
+        doFirst {
+            if (forcePortable) {
+                logger.lifecycle('forcePortable=true: Building portable ZIP (packageWinPortableZip).')
+            } else {
+                logger.lifecycle('WiX not found. Building portable ZIP (packageWinPortableZip).')
+            }
+        }
+    }
 }
 
 // Download SnoreToast.exe into packaging/windows/resources
